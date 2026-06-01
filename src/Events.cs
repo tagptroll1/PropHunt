@@ -200,18 +200,33 @@ public static class Events
         var player = @event.Userid;
         if (player == null) return HookResult.Continue;
 
+        bool isHider = player.Team == Utils.TeamFromText(Config.Settings.Hiding.Team);
+
+        // For hiders: hide cosmetics SYNCHRONOUSLY in the spawn event before
+        // any frame paints. The previous flow waited a frame, set render
+        // alpha to 254 (visible), then ran PropSpawner — which produced a
+        // brief flash of the player's normal model + the prop popping in.
+        // Hiding cosmetics first eliminates the flash; the prop appears in
+        // the same frame as the player would have been visible.
+        if (isHider)
+            Plugin.HideHiderCosmetics(player);
+
         Server.NextFrame(() =>
         {
             player.RemoveWeapons();
-            player.PlayerPawn.Value!.Render = Color.FromArgb(254, 255, 255, 255);
-            Utilities.SetStateChanged(player.PlayerPawn.Value!, "CBaseModelEntity", "m_clrRender");
+
+            if (!isHider)
+            {
+                player.PlayerPawn.Value!.Render = Color.FromArgb(254, 255, 255, 255);
+                Utilities.SetStateChanged(player.PlayerPawn.Value!, "CBaseModelEntity", "m_clrRender");
+            }
 
             // Blank the radar for everyone. -1 hides the HUD radar element
             // entirely; otherwise seekers could spot hider blips during
             // search and hiders could see seeker positions.
             player.ExecuteClientCommand("cl_drawhud_force_radar -1");
 
-            if (player.Team == Utils.TeamFromText(Config.Settings.Hiding.Team))
+            if (isHider)
             {
                 Utils.PropSpawner(player);
             }
