@@ -20,6 +20,19 @@ public class Config_Settings
         public int TauntLimit { get; set; } = 10;
     }
     public Config_Settings_Hiding Hiding { get; set; } = new();
+
+    public class Config_Settings_Sizes
+    {
+        // Volume thresholds in units^3 (AABB extents product).
+        public float SmallMaxVolume { get; set; } = 4096f;     // < 16^3
+        public float MediumMaxVolume { get; set; } = 262144f;  // < 64^3
+        public int[] SmallHpRange { get; set; } = [10, 25];
+        public int[] MediumHpRange { get; set; } = [25, 100];
+        public int[] LargeHpRange { get; set; } = [100, 250];
+    }
+    public Config_Settings_Sizes Sizes { get; set; } = new();
+
+    public bool Debug { get; set; } = false;
 }
 
 public class Config_Sounds
@@ -30,6 +43,8 @@ public class Config_Sounds
     public List<string> Taunt { get; set; } = [ "training.commander_comment_19", "training.commander_comment_21", "training.commander_comment_22"];
 }
 
+public enum PropSize { Small, Medium, Large }
+
 public class PlayerProp
 {
     public CPhysicsProp entity;
@@ -38,6 +53,9 @@ public class PlayerProp
     public int Swaps;
     public int Decoys;
     public int Taunts;
+    public PropSize Size;
+    public int Hp;
+    public int MaxHp;
 
     public PlayerProp(CPhysicsProp prop, string model)
     {
@@ -47,5 +65,8 @@ public class PlayerProp
         Swaps = Plugin.Instance.Config.Settings.Hiding.SwapLimit;
         Decoys = Plugin.Instance.Config.Settings.Hiding.DecoyLimit;
         Taunts = Plugin.Instance.Config.Settings.Hiding.TauntLimit;
+        Size = PropSize.Medium;
+        Hp = 100;
+        MaxHp = 100;
     }
 }

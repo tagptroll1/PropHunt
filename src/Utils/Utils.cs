@@ -85,11 +85,73 @@ public static class Utils
             prop.Teleport(player.AbsOrigin);
             prop.DispatchSpawn();
             prop.AcceptInput("DisableMotion");
-            prop.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_DEBRIS);
+
+            var data = new PlayerProp(prop, model);
+            ApplySizeAndCollision(prop, data);
 
             Plugin.HideHiderCosmetics(player);
-            Plugin.HiddenPlayers.Add(player.Slot, new PlayerProp(prop, model));
+            Plugin.HiddenPlayers.Add(player.Slot, data);
+
+            if (Instance.Config.Settings.Debug)
+                Utils.Log($"[PropSpawner] slot={player.Slot} model={model} size={data.Size} hp={data.Hp}");
+            Utils.PrintToChat(player, $"Prop: {data.Size} / {data.Hp} HP");
         }
+    }
+
+    // Classify prop by AABB volume, assign HP via linear interpolation within
+    // the configured range, and set the matching collision group. Reused on
+    // both initial spawn and DoSwap so size/HP track the current model.
+    public static void ApplySizeAndCollision(CPhysicsProp prop, PlayerProp data)
+    {
+        var sizes = Instance.Config.Settings.Sizes;
+
+        var mins = prop.Collision.Mins;
+        var maxs = prop.Collision.Maxs;
+        float dx = MathF.Max(1f, maxs.X - mins.X);
+        float dy = MathF.Max(1f, maxs.Y - mins.Y);
+        float dz = MathF.Max(1f, maxs.Z - mins.Z);
+        float volume = dx * dy * dz;
+
+        PropSize size;
+        int[] range;
+        float lo, hi;
+
+        if (volume < sizes.SmallMaxVolume)
+        {
+            size = PropSize.Small;
+            range = sizes.SmallHpRange;
+            lo = 0f;
+            hi = sizes.SmallMaxVolume;
+        }
+        else if (volume < sizes.MediumMaxVolume)
+        {
+            size = PropSize.Medium;
+            range = sizes.MediumHpRange;
+            lo = sizes.SmallMaxVolume;
+            hi = sizes.MediumMaxVolume;
+        }
+        else
+        {
+            size = PropSize.Large;
+            range = sizes.LargeHpRange;
+            lo = sizes.MediumMaxVolume;
+            hi = sizes.MediumMaxVolume * 8f; // cap interpolation; anything bigger pegs to max
+        }
+
+        float t = Math.Clamp((volume - lo) / MathF.Max(1f, hi - lo), 0f, 1f);
+        int hp = (int)MathF.Round(range[0] + t * (range[1] - range[0]));
+
+        data.Size = size;
+        data.Hp = hp;
+        data.MaxHp = hp;
+
+        // Large props are solid + standable; small/medium use debris so bullets
+        // still hit (OnEntityTakeDamagePre routes damage to the hider) but
+        // players walk through.
+        var group = size == PropSize.Large
+            ? CollisionGroup.COLLISION_GROUP_NPC
+            : CollisionGroup.COLLISION_GROUP_DEBRIS;
+        prop.CollisionRulesChanged(group);
     }
 
     public static void AddMapModels(string mapname)

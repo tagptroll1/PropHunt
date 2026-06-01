@@ -122,9 +122,15 @@ public partial class Plugin
 
         data.entity.SetModel(model);
         Plugin.LastModel[player.Slot] = model;
+        data.Model = model;
+
+        // SetModel changes the underlying mesh — the AABB updates, so re-run
+        // the size/HP classification. Reset HP to the new max (intentional:
+        // swapping refreshes you, like picking a new disguise).
+        Utils.ApplySizeAndCollision(data.entity, data);
 
         data.Swaps--;
-        Utils.PrintToChat(player, $"{ChatColors.Grey}Swapped model. You have {data.Swaps} left");
+        Utils.PrintToChat(player, $"{ChatColors.Grey}Swapped model. You have {data.Swaps} left ({data.Size} / {data.Hp} HP)");
     }
 
     // ---- Console-command entry points --------------------------------------

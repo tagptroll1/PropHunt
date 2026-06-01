@@ -307,6 +307,17 @@ public static class Events
                 var attacker = attackerPawn.OriginalController.Value;
                 if (attacker == null) break;
 
+                // Subtract bullet damage from prop HP. Survivors get a chat
+                // update; only kill when HP runs out.
+                int dmg = (int)MathF.Max(1f, info.Damage);
+                hidden.Value.Hp -= dmg;
+
+                if (hidden.Value.Hp > 0)
+                {
+                    Utils.PrintToChat(target, $"{hidden.Value.Size}: {hidden.Value.Hp}/{hidden.Value.MaxHp}");
+                    return HookResult.Continue;
+                }
+
                 if (prop != null && prop.IsValid)
                     prop.Remove();
 
