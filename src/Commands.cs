@@ -8,6 +8,7 @@ using System.Drawing;
 using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
 using CounterStrikeSharp.API.Core.Attributes.Registration;
+using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Entities.Constants;
 using CounterStrikeSharp.API.Modules.Timers;
@@ -28,21 +29,58 @@ public partial class Plugin
     {
         data.Frozen = !data.Frozen;
 
+        // Prop stays motion-disabled in BOTH states. Enabling motion when
+        // freezing made the prop drop under gravity, which defeats the point
+        // of freezing (locking the prop in a chosen hiding spot).
+        // Collision: when frozen the prop is solid (DEFAULT) so seekers bump
+        // and stand on it; when unfrozen we restore the size-tier collision
+        // so it tracks the player normally.
         if (data.Frozen)
         {
-            data.entity.AcceptInput("EnableMotion");
             data.entity.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_DEFAULT);
             player.Freeze();
         }
         else
         {
-            data.entity.AcceptInput("DisableMotion");
-            data.entity.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_DEBRIS);
+            var group = data.Size == PropSize.Large
+                ? CollisionGroup.COLLISION_GROUP_NPC
+                : CollisionGroup.COLLISION_GROUP_DEBRIS;
+            data.entity.CollisionRulesChanged(group);
             player.UnFreeze();
         }
 
-        data.entity.Teleport(player.PlayerPawn.Value?.AbsOrigin, player.PlayerPawn.Value?.AbsRotation);
+        var pawn = player.PlayerPawn.Value;
+        if (pawn != null)
+        {
+            var rot = pawn.AbsRotation;
+            if (data.YawOffset != 0f)
+                rot = new QAngle(rot.X, rot.Y + data.YawOffset, rot.Z);
+            data.entity.Teleport(pawn.AbsOrigin, rot);
+        }
+
         Utils.PrintToChat(player, $"{ChatColors.Grey}Freeze: {(data.Frozen ? $"{ChatColors.Green}ON" : $"{ChatColors.Red}OFF")}");
+    }
+
+    // Nudge the prop's yaw by `delta` degrees. Only meaningful while the prop
+    // is Frozen — when unfrozen, OnTick re-applies the player's AbsRotation
+    // (plus YawOffset) every tick. Frozen props don't get OnTick updates, so
+    // we snap them with an explicit Teleport here.
+    private static void DoRotate(CCSPlayerController player, PlayerProp data, float delta)
+    {
+        if (!data.Frozen)
+        {
+            Utils.PrintToChat(player, $"{ChatColors.Grey}Rotation only works while frozen");
+            return;
+        }
+
+        data.YawOffset = (data.YawOffset + delta) % 360f;
+
+        var pawn = player.PlayerPawn.Value;
+        if (pawn == null) return;
+
+        var baseRot = pawn.AbsRotation;
+        var rot = new QAngle(baseRot.X, baseRot.Y + data.YawOffset, baseRot.Z);
+        data.entity.Teleport(data.entity.AbsOrigin, rot);
     }
 
     private static void DoDecoy(CCSPlayerController player, PlayerProp data)
@@ -167,6 +205,69 @@ public partial class Plugin
         DoSwap(player!, data);
     }
 
+    [ConsoleCommand("css_phrotleft", "Prop Hunt: nudge frozen prop rotation 15° left")]
+    public void OnPhRotLeft(CCSPlayerController? player, CommandInfo command)
+    {
+        var data = Hider(player);
+        if (data == null) return;
+        DoRotate(player!, data, -15f);
+    }
+
+    [ConsoleCommand("css_phrotright", "Prop Hunt: nudge frozen prop rotation 15° right")]
+    public void OnPhRotRight(CCSPlayerController? player, CommandInfo command)
+    {
+        var data = Hider(player);
+        if (data == null) return;
+        DoRotate(player!, data, 15f);
+    }
+
+    // ---- Admin physics debug -----------------------------------------------
+    // Lock / unlock every loose physics prop on the map (NOT hider props —
+    // they're tracked separately and untouchable here). Useful when a map
+    // exploit lets seekers shove crates into hider hiding spots.
+    private static IEnumerable<CBaseEntity> LoosePhysicsProps()
+    {
+        var hiderProps = new HashSet<uint>(
+            Plugin.HiddenPlayers.Values
+                .Where(p => p.entity != null && p.entity.IsValid)
+                .Select(p => p.entity.Index));
+
+        foreach (var name in new[] { "prop_physics_multiplayer", "prop_physics", "prop_physics_override" })
+            foreach (var ent in Utilities.FindAllEntitiesByDesignerName<CBaseEntity>(name))
+                if (ent.IsValid && !hiderProps.Contains(ent.Index))
+                    yield return ent;
+    }
+
+    [RequiresPermissions("@css/admin")]
+    [ConsoleCommand("css_ph_lockphys", "Prop Hunt admin: freeze all loose physics props")]
+    public void OnPhLockPhys(CCSPlayerController? player, CommandInfo command)
+    {
+        int n = 0;
+        foreach (var ent in LoosePhysicsProps())
+        {
+            ent.AcceptInput("DisableMotion");
+            n++;
+        }
+        var who = player ?? null;
+        if (who != null) Utils.PrintToChat(who, $"Locked {n} props");
+        else Utils.Log($"[admin] Locked {n} props");
+    }
+
+    [RequiresPermissions("@css/admin")]
+    [ConsoleCommand("css_ph_unlockphys", "Prop Hunt admin: unfreeze all loose physics props")]
+    public void OnPhUnlockPhys(CCSPlayerController? player, CommandInfo command)
+    {
+        int n = 0;
+        foreach (var ent in LoosePhysicsProps())
+        {
+            ent.AcceptInput("EnableMotion");
+            n++;
+        }
+        var who = player ?? null;
+        if (who != null) Utils.PrintToChat(who, $"Unlocked {n} props");
+        else Utils.Log($"[admin] Unlocked {n} props");
+    }
+
     // ---- Hide cosmetics (body + gloves + agent wearables) ------------------
     // Pawn `m_clrRender` alpha=0 hides only the body model. Gloves and agent
     // cosmetics are separate CEconWearable entities listed in the pawn's
@@ -207,6 +308,15 @@ public partial class Plugin
             if ((pressed & PlayerButtons.Use)     != 0) DoFreeze(player, data);
             if ((pressed & PlayerButtons.Reload)  != 0) DoSwap(player, data);
             if ((pressed & PlayerButtons.Attack2) != 0) DoTaunt(player, data);
+
+            // While frozen, A/D nudge yaw instead of being noops (player can't
+            // strafe anyway — MOVETYPE_OBSOLETE blocks movement). Lets the
+            // hider align their prop with cover.
+            if (data.Frozen)
+            {
+                if ((pressed & PlayerButtons.Moveleft)  != 0) DoRotate(player, data, -15f);
+                if ((pressed & PlayerButtons.Moveright) != 0) DoRotate(player, data,  15f);
+            }
         });
 
         // Safety net: re-run the cosmetic hide ~250ms after each player spawn

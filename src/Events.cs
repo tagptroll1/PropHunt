@@ -135,7 +135,12 @@ public static class Events
                 var prop = hidden.entity;
 
                 if (!hidden.Frozen)
-                    prop.Teleport(pawn.AbsOrigin, pawn.AbsRotation);
+                {
+                    var rot = pawn.AbsRotation;
+                    if (hidden.YawOffset != 0f)
+                        rot = new QAngle(rot.X, rot.Y + hidden.YawOffset, rot.Z);
+                    prop.Teleport(pawn.AbsOrigin, rot);
+                }
             }
         }
 
@@ -168,8 +173,22 @@ public static class Events
             Utils.PrintToChatAll("Releasing the seekers!");
             Plugin.roundStarted = true;
 
+            // Pull seekers down from the off-map hold into a real CT spawn,
+            // then unfreeze. If no CT spawns are found (weird map), just
+            // unfreeze in place — better than leaving them stranded at z+10000.
+            var ctSpawns = Utilities.FindAllEntitiesByDesignerName<SpawnPoint>("info_player_counterterrorist").ToList();
+
             foreach (var player in seekers)
+            {
+                var pawn = player.PlayerPawn.Value;
+                if (pawn != null && ctSpawns.Count > 0)
+                {
+                    var spawn = ctSpawns[Random.Shared.Next(ctSpawns.Count)];
+                    if (spawn.AbsOrigin != null)
+                        pawn.Teleport(spawn.AbsOrigin, spawn.AbsRotation, new Vector(0, 0, 0));
+                }
                 player.UnFreeze();
+            }
 
         }, TimerFlags.STOP_ON_MAPCHANGE);
 
@@ -200,6 +219,23 @@ public static class Events
                 {
                     player.Freeze();
                     player.ColorScreen(Color.Black, Config.Settings.Hiding.Time, 0.5f, EntityExtends.FadeFlags.FADE_OUT);
+
+                    // Park the seeker high above their spawn point so they
+                    // can't audio-scout / clip-peek the hiders during hide
+                    // time. They're already frozen + black-screened, but
+                    // physically being out of the playable area also kills
+                    // any chance of fmod 3D-positional info leaking. Reveal
+                    // teleports them back to a random CT spawn.
+                    var heldPawn = player.PlayerPawn.Value;
+                    if (heldPawn != null)
+                    {
+                        var origin = heldPawn.AbsOrigin;
+                        if (origin != null)
+                        {
+                            var lift = new Vector(origin.X, origin.Y, origin.Z + 10000f);
+                            heldPawn.Teleport(lift, heldPawn.AbsRotation, new Vector(0, 0, 0));
+                        }
+                    }
                 }
 
                 else player.UnFreeze();

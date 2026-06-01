@@ -68,5 +68,11 @@ public class PlayerProp
         Size = PropSize.Medium;
         Hp = 100;
         MaxHp = 100;
+        YawOffset = 0f;
     }
+
+    // Admin-nudged yaw offset, added to the player's AbsRotation each tick.
+    // Lets an admin rotate a stuck/awkward prop without the player having to
+    // physically turn around. Persists across freeze/unfreeze.
+    public float YawOffset;
 }
