@@ -206,6 +206,11 @@ public static class Events
             player.PlayerPawn.Value!.Render = Color.FromArgb(254, 255, 255, 255);
             Utilities.SetStateChanged(player.PlayerPawn.Value!, "CBaseModelEntity", "m_clrRender");
 
+            // Blank the radar for everyone. -1 hides the HUD radar element
+            // entirely; otherwise seekers could spot hider blips during
+            // search and hiders could see seeker positions.
+            player.ExecuteClientCommand("cl_drawhud_force_radar -1");
+
             if (player.Team == Utils.TeamFromText(Config.Settings.Hiding.Team))
             {
                 Utils.PropSpawner(player);
@@ -232,7 +237,12 @@ public static class Events
                         var origin = heldPawn.AbsOrigin;
                         if (origin != null)
                         {
-                            var lift = new Vector(origin.X, origin.Y, origin.Z + 10000f);
+                            // Push well past Source 2's audible falloff range.
+                            // 10000 wasn't enough — seekers still picked up
+                            // taunts/footsteps from the play area. 60000 is
+                            // far outside the typical 16k map bounds; sound
+                            // amplitude at that distance is effectively zero.
+                            var lift = new Vector(origin.X, origin.Y, origin.Z + 60000f);
                             heldPawn.Teleport(lift, heldPawn.AbsRotation, new Vector(0, 0, 0));
                         }
                     }
@@ -343,17 +353,10 @@ public static class Events
                 var attacker = attackerPawn.OriginalController.Value;
                 if (attacker == null) break;
 
-                // Subtract bullet damage from prop HP. Survivors get a chat
-                // update; only kill when HP runs out.
-                int dmg = (int)MathF.Max(1f, info.Damage);
-                hidden.Value.Hp -= dmg;
-
-                if (hidden.Value.Hp > 0)
-                {
-                    Utils.PrintToChat(target, $"{hidden.Value.Size}: {hidden.Value.Hp}/{hidden.Value.MaxHp}");
-                    return HookResult.Continue;
-                }
-
+                // HP gating was tried in Phase 2 but the prop-damage events
+                // weren't reliably scaling with bullet damage, so hiders
+                // effectively became invulnerable. Reverted to instant-kill
+                // on any registered hit — same as Phase 1 behaviour.
                 if (prop != null && prop.IsValid)
                     prop.Remove();
 

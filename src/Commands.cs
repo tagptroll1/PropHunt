@@ -116,15 +116,11 @@ public partial class Plugin
         }
 
         var sounds = Instance.Config.Sounds.Taunt;
-        // Emit from the PROP entity (not the player pawn): the prop is where
-        // seekers see the hider, so audio must come from the same world point.
-        // Also bypasses the per-player sound-recipient filter in
-        // CMsgSosStartSoundEvent — that one only strips msg-208 sounds emitted
-        // by the player pawn.
-        if (data.entity != null && data.entity.IsValid)
-            data.entity.EmitSound(sounds[Random.Shared.Next(sounds.Count)]);
-        else
-            player.EmitSound(sounds[Random.Shared.Next(sounds.Count)]);
+        // Emit from the player pawn — OnTick keeps prop.AbsOrigin synced to
+        // pawn.AbsOrigin, so this still plays at the prop's visible location
+        // for seekers, but unlike prop_physics_override the player pawn is a
+        // proper 3D audio emitter so directional falloff works.
+        player.EmitSound(sounds[Random.Shared.Next(sounds.Count)]);
 
         Utils.PrintToChat(player, unlimited
             ? $"{ChatColors.Grey}Taunt!"
