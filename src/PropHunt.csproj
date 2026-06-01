@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
     <PropertyGroup>		
-        <TargetFramework>net8.0</TargetFramework>
+        <TargetFramework>net9.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -8,6 +8,5 @@
 
     <ItemGroup>
         <PackageReference Include="CounterStrikeSharp.API" Version="1.0.355" />
-        <PackageReference Include="CS2MenuManager" Version="1.0.39" />
     </ItemGroup>
 </Project>

@@ -62,7 +62,14 @@ public static class Utils
             return;
         }
 
+        // True random pick, but avoid handing the same player the same model two
+        // rounds in a row. Five attempts is enough — with a pool of N>=2 the
+        // probability of five collisions is (1/N)^5.
+        Plugin.LastModel.TryGetValue(player.Slot, out var previous);
         string model = models[Random.Shared.Next(models.Count)];
+        for (int attempt = 0; attempt < 5 && model == previous && models.Count > 1; attempt++)
+            model = models[Random.Shared.Next(models.Count)];
+        Plugin.LastModel[player.Slot] = model;
 
         if (swap && Plugin.HiddenPlayers.TryGetValue(player.Slot, out var existingProp))
         {
@@ -78,8 +85,9 @@ public static class Utils
             prop.Teleport(player.AbsOrigin);
             prop.DispatchSpawn();
             prop.AcceptInput("DisableMotion");
-            prop.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_TRIGGER);
+            prop.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_DEBRIS);
 
+            Plugin.HideHiderCosmetics(player);
             Plugin.HiddenPlayers.Add(player.Slot, new PlayerProp(prop, model));
         }
     }
@@ -91,7 +99,7 @@ public static class Utils
         string filePath = Path.Combine(Instance.ModuleDirectory, "maps", $"{mapname}.txt");
 
         if (!File.Exists(filePath))
-            return;
+            filePath = Path.Combine(Instance.ModuleDirectory, "maps", "default.txt");
 
         try
         {
@@ -101,7 +109,9 @@ public static class Utils
                 if (string.IsNullOrEmpty(trimmed) || trimmed.StartsWith("//") || trimmed.StartsWith("#"))
                     continue;
 
-                if (trimmed.EndsWith(".vmdl", StringComparison.OrdinalIgnoreCase))
+                if (trimmed.EndsWith(".vmdl", StringComparison.OrdinalIgnoreCase)
+                    && trimmed.IndexOf("weapon_c4", StringComparison.OrdinalIgnoreCase) < 0
+                    && trimmed.IndexOf("/c4", StringComparison.OrdinalIgnoreCase) < 0)
                     Plugin.models.Add(trimmed.ToLower());
             }
 

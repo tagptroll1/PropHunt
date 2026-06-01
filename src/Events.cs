@@ -1,12 +1,8 @@
 ﻿using CounterStrikeSharp.API;
 using CounterStrikeSharp.API.Core;
-using CounterStrikeSharp.API.Modules.Entities;
-using CounterStrikeSharp.API.Modules.Entities.Constants;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.UserMessages;
 using CounterStrikeSharp.API.Modules.Utils;
-using CS2MenuManager.API.Class;
-using System.Collections.Generic;
 using System.Drawing;
 
 public static class Events
@@ -30,8 +26,6 @@ public static class Events
         Instance.RegisterEventHandler<EventRoundEnd>(EventRoundEnd);
         Instance.RegisterEventHandler<EventRoundPrestart>(EventRoundPrestart);
         Instance.RegisterEventHandler<EventPlayerDeath>(EventPlayerDeath, HookMode.Pre);
-
-        Instance.HookUserMessage(208, CMsgSosStartSoundEvent, HookMode.Pre);
     }
 
     public static void Deregister()
@@ -49,8 +43,6 @@ public static class Events
         Instance.DeregisterEventHandler<EventRoundEnd>(EventRoundEnd);
         Instance.DeregisterEventHandler<EventRoundPrestart>(EventRoundPrestart);
         Instance.DeregisterEventHandler<EventPlayerDeath>(EventPlayerDeath, HookMode.Pre);
-
-        Instance.UnhookUserMessage(208, CMsgSosStartSoundEvent, HookMode.Pre);
     }
 
     private static void OnMapStart(string mapname)
@@ -68,6 +60,8 @@ public static class Events
 
     private static void OnServerPrecacheResources(ResourceManifest manifest)
     {
+        Utils.AddMapModels(Server.MapName);
+
         List<string> resources =
         [
             Config.Sounds.SoundEvents,
@@ -88,9 +82,9 @@ public static class Events
 
     private static void OnEntitySpawned(CEntityInstance entity)
     {
-        if (entity.DesignerName == "prop_physics_multiplayer")
+        if (entity.DesignerName == "prop_physics_multiplayer" || entity.DesignerName == "prop_dynamic")
         {
-            var prop = new CPhysicsPropMultiplayer(entity.Handle);
+            var prop = new CBaseModelEntity(entity.Handle);
 
             string model = prop.CBodyComponent!.SceneNode!.GetSkeletonInstance().ModelState.ModelName;
 
@@ -167,9 +161,6 @@ public static class Events
 
         var seekers = Utilities.GetPlayers().Where(x => x.Team != Utils.TeamFromText(Config.Settings.Hiding.Team));
 
-        foreach (var player in seekers)
-            MenuManager.CloseActiveMenu(player);
-
         Instance.AddTimer(seconds, () =>
         {
             var sounds = Instance.Config.Sounds.RoundStart;
@@ -199,7 +190,6 @@ public static class Events
             if (player.Team == Utils.TeamFromText(Config.Settings.Hiding.Team))
             {
                 Utils.PropSpawner(player);
-                Menu.Open(player);
             }
             else
             {
@@ -320,7 +310,6 @@ public static class Events
                 if (prop != null && prop.IsValid)
                     prop.Remove();
 
-                MenuManager.CloseActiveMenu(target);
                 Plugin.HiddenPlayers.Remove(target.Slot);
 
                 nint death = NativeAPI.CreateEvent("player_death", true);
