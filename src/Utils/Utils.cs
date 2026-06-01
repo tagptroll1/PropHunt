@@ -90,6 +90,17 @@ public static class Utils
             ApplySizeAndCollision(prop, data);
 
             Plugin.HideHiderCosmetics(player);
+
+            // Drop the pawn's own collision so seekers don't bump into an
+            // invisible capsule. The prop is what they should physically
+            // interact with — pawn becomes DEBRIS (walk-through, no movement
+            // collision). Bullets that would hit the pawn are zeroed by
+            // OnPlayerTakeDamagePre anyway, and shooting the prop still
+            // triggers OnEntityTakeDamagePre → kill.
+            var pawn = player.PlayerPawn.Value;
+            if (pawn != null && pawn.IsValid)
+                pawn.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_DEBRIS);
+
             Plugin.HiddenPlayers.Add(player.Slot, data);
 
             if (Instance.Config.Settings.Debug)

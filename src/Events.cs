@@ -237,13 +237,16 @@ public static class Events
                         var origin = heldPawn.AbsOrigin;
                         if (origin != null)
                         {
-                            // Push well past Source 2's audible falloff range.
-                            // 10000 wasn't enough — seekers still picked up
-                            // taunts/footsteps from the play area. 60000 is
-                            // far outside the typical 16k map bounds; sound
-                            // amplitude at that distance is effectively zero.
-                            var lift = new Vector(origin.X, origin.Y, origin.Z + 60000f);
-                            heldPawn.Teleport(lift, heldPawn.AbsRotation, new Vector(0, 0, 0));
+                            // Teleport DOWN, not up. Upward lifts to z+60000
+                            // got ignored — probably because the seeker is
+                            // frozen via MOVETYPE_OBSOLETE on the same frame
+                            // and the engine rejects the displacement, or a
+                            // kill volume above the skybox bounces them back.
+                            // Below-map space has no such constraint; the
+                            // seeker is also frozen so they can't suicide
+                            // into a respawn.
+                            var sink = new Vector(origin.X, origin.Y, origin.Z - 30000f);
+                            heldPawn.Teleport(sink, heldPawn.AbsRotation, new Vector(0, 0, 0));
                         }
                     }
                 }
