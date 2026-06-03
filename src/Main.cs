@@ -12,6 +12,9 @@ public partial class Plugin : BasePlugin, IPluginConfig<Config>
     public static DateTime hideTime = DateTime.Now;
     public static Dictionary<int, PlayerProp> HiddenPlayers = new();
     public static Dictionary<int, string> LastModel = new();
+    // Slot -> invisible prop the player's camera is anchored to while in
+    // thirdperson. Presence in this dict == thirdperson is on for that slot.
+    public static Dictionary<int, CDynamicProp> ThirdpersonCam = new();
     public static bool roundStarted = false;
 
     public override void Load(bool hotReload)

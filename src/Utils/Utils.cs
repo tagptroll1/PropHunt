@@ -156,6 +156,13 @@ public static class Utils
         data.Hp = hp;
         data.MaxHp = hp;
 
+        // Cache the model's horizontal center offset so the prop can be kept
+        // centered on the player (see PlayerProp.CenterX/Y). Z is left alone:
+        // the model origin sitting at the player's feet keeps the prop resting
+        // on the ground.
+        data.CenterX = (mins.X + maxs.X) / 2f;
+        data.CenterY = (mins.Y + maxs.Y) / 2f;
+
         // Large props are solid + standable; small/medium use debris so bullets
         // still hit (OnEntityTakeDamagePre routes damage to the hider) but
         // players walk through.
@@ -163,6 +170,26 @@ public static class Utils
             ? CollisionGroup.COLLISION_GROUP_NPC
             : CollisionGroup.COLLISION_GROUP_DEBRIS;
         prop.CollisionRulesChanged(group);
+    }
+
+    // Where to teleport a prop so its geometric center (not its model origin)
+    // sits over the player's X/Y. The cached local-space center offset is
+    // rotated into world space by the prop's yaw (pitch/roll are ~0 for a
+    // standing pawn). Returns the player's origin unchanged when the model is
+    // already origin-centered, so most props pay no cost.
+    public static Vector PropFollowOrigin(Vector pawnOrigin, float yawDeg, PlayerProp data)
+    {
+        if (data.CenterX == 0f && data.CenterY == 0f)
+            return pawnOrigin;
+
+        double yaw = yawDeg * Math.PI / 180.0;
+        float cos = (float)Math.Cos(yaw);
+        float sin = (float)Math.Sin(yaw);
+
+        float worldX = cos * data.CenterX - sin * data.CenterY;
+        float worldY = sin * data.CenterX + cos * data.CenterY;
+
+        return new Vector(pawnOrigin.X - worldX, pawnOrigin.Y - worldY, pawnOrigin.Z);
     }
 
     public static void AddMapModels(string mapname)

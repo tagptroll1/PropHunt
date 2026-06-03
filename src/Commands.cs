@@ -13,6 +13,7 @@ using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Entities.Constants;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
+using FixVectorLeak;
 
 public partial class Plugin
 {
@@ -32,12 +33,31 @@ public partial class Plugin
         // Prop stays motion-disabled in BOTH states. Enabling motion when
         // freezing made the prop drop under gravity, which defeats the point
         // of freezing (locking the prop in a chosen hiding spot).
-        // Collision: when frozen the prop is solid (DEFAULT) so seekers bump
-        // and stand on it; when unfrozen we restore the size-tier collision
-        // so it tracks the player normally.
+        // Collision: when frozen the prop is solid + standable (NPC group) so
+        // seekers bump into and stand on it; when unfrozen we restore the
+        // size-tier collision so it tracks the player normally.
+        var pawn = player.PlayerPawn.Value;
+
         if (data.Frozen)
         {
-            data.entity.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_DEFAULT);
+            // NPC is the "solid + standable" group (same one large props use):
+            // seekers can bump into and jump on top of a frozen prop. DEFAULT
+            // did not register as standable here, so frozen hiders had no
+            // effective hitbox to climb on.
+            data.entity.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_NPC);
+
+            // Kill the pawn's velocity *before* freezing the move type. Freezing
+            // only stops further movement; any velocity the player carried into
+            // the freeze (e.g. mid-air) would otherwise drift the pawn away from
+            // the now-stationary prop, so the player and prop ended up in
+            // different spots. Zeroing it keeps them locked together.
+            if (pawn != null && pawn.AbsVelocity != null)
+            {
+                pawn.AbsVelocity.X = 0f;
+                pawn.AbsVelocity.Y = 0f;
+                pawn.AbsVelocity.Z = 0f;
+            }
+
             player.Freeze();
         }
         else
@@ -49,13 +69,13 @@ public partial class Plugin
             player.UnFreeze();
         }
 
-        var pawn = player.PlayerPawn.Value;
         if (pawn != null)
         {
             var rot = pawn.AbsRotation;
+            float yaw = rot.Y + data.YawOffset;
             if (data.YawOffset != 0f)
-                rot = new QAngle(rot.X, rot.Y + data.YawOffset, rot.Z);
-            data.entity.Teleport(pawn.AbsOrigin, rot);
+                rot = new QAngle(rot.X, yaw, rot.Z);
+            data.entity.Teleport(Utils.PropFollowOrigin(pawn.AbsOrigin, yaw, data), rot);
         }
 
         Utils.PrintToChat(player, $"{ChatColors.Grey}Freeze: {(data.Frozen ? $"{ChatColors.Green}ON" : $"{ChatColors.Red}OFF")}");
@@ -79,8 +99,12 @@ public partial class Plugin
         if (pawn == null) return;
 
         var baseRot = pawn.AbsRotation;
-        var rot = new QAngle(baseRot.X, baseRot.Y + data.YawOffset, baseRot.Z);
-        data.entity.Teleport(data.entity.AbsOrigin, rot);
+        float yaw = baseRot.Y + data.YawOffset;
+        var rot = new QAngle(baseRot.X, yaw, baseRot.Z);
+        // Re-derive the origin from the pawn (not the prop's current origin):
+        // rotating changes which way the center offset points, so we must
+        // recompute it to keep the prop's center over the player.
+        data.entity.Teleport(Utils.PropFollowOrigin(pawn.AbsOrigin, yaw, data), rot);
     }
 
     private static void DoDecoy(CCSPlayerController player, PlayerProp data)
@@ -116,11 +140,18 @@ public partial class Plugin
         }
 
         var sounds = Instance.Config.Sounds.Taunt;
-        // Emit from the player pawn — OnTick keeps prop.AbsOrigin synced to
-        // pawn.AbsOrigin, so this still plays at the prop's visible location
-        // for seekers, but unlike prop_physics_override the player pawn is a
-        // proper 3D audio emitter so directional falloff works.
-        player.EmitSound(sounds[Random.Shared.Next(sounds.Count)]);
+        var sound = sounds[Random.Shared.Next(sounds.Count)];
+        // Emit from the player PAWN, not the controller. The controller is a
+        // non-spatial entity (no world transform), so EmitSound on it plays at
+        // the world origin (0,0,0) for everyone — that was the "taunts all play
+        // in one spot" bug. OnTick keeps the pawn synced to the prop's visible
+        // location, and the pawn is a proper 3D audio emitter, so emitting from
+        // it plays the taunt at the prop with correct directional falloff.
+        var pawn = player.PlayerPawn.Value;
+        if (pawn != null && pawn.IsValid)
+            pawn.EmitSound(sound);
+        else
+            player.EmitSound(sound);
 
         Utils.PrintToChat(player, unlimited
             ? $"{ChatColors.Grey}Taunt!"
@@ -217,6 +248,130 @@ public partial class Plugin
         DoRotate(player!, data, 15f);
     }
 
+    // ---- Thirdperson (no sv_cheats) ----------------------------------------
+    // We deliberately don't touch the `thirdperson` / cam_* cheat cvars (they
+    // need sv_cheats 1). Instead we point the pawn's camera at an invisible
+    // prop_dynamic anchored behind the player's eyes and re-position it every
+    // tick (UpdateThirdpersonCameras, called from OnTick). Setting the pawn's
+    // m_hViewEntity makes the client render from that entity's POV — for a
+    // hider this shows their own prop from behind, for a seeker their body.
+    private static void ToggleThirdperson(CCSPlayerController player)
+    {
+        if (Plugin.ThirdpersonCam.ContainsKey(player.Slot))
+            DisableThirdperson(player);
+        else
+            EnableThirdperson(player);
+    }
+
+    private static void EnableThirdperson(CCSPlayerController player)
+    {
+        var pawn = player.PlayerPawn.Value;
+        if (pawn == null || !pawn.IsValid || pawn.CameraServices == null) return;
+        if (!player.PawnIsAlive) return;
+
+        var camera = Utilities.CreateEntityByName<CDynamicProp>("prop_dynamic");
+        if (camera == null) return;
+        camera.DispatchSpawn();
+
+        Plugin.ThirdpersonCam[player.Slot] = camera;
+        PositionThirdpersonCamera(pawn, camera);
+
+        pawn.CameraServices.ViewEntity.Raw = camera.EntityHandle.Raw;
+        Utilities.SetStateChanged(pawn, "CBasePlayerPawn", "m_pCameraServices");
+
+        Utils.PrintToChat(player, $"Thirdperson: {ChatColors.Green}ON");
+    }
+
+    public static void DisableThirdperson(CCSPlayerController player)
+    {
+        if (Plugin.ThirdpersonCam.TryGetValue(player.Slot, out var camera))
+        {
+            if (camera != null && camera.IsValid)
+                camera.Remove();
+            Plugin.ThirdpersonCam.Remove(player.Slot);
+        }
+
+        var pawn = player.PlayerPawn.Value;
+        if (pawn != null && pawn.IsValid && pawn.CameraServices != null)
+        {
+            // 0xFFFFFFFF is an invalid handle — the client falls back to the
+            // pawn's own eyes (first person).
+            pawn.CameraServices.ViewEntity.Raw = uint.MaxValue;
+            Utilities.SetStateChanged(pawn, "CBasePlayerPawn", "m_pCameraServices");
+        }
+
+        if (player.IsValid)
+            Utils.PrintToChat(player, $"Thirdperson: {ChatColors.Red}OFF");
+    }
+
+    // Anchor the camera prop behind + slightly above the eyes, along the view
+    // direction, so the player sees themselves from over-the-shoulder. No wall
+    // trace — the camera can clip through geometry; acceptable for a toggle.
+    private static void PositionThirdpersonCamera(CCSPlayerPawn pawn, CDynamicProp camera)
+    {
+        var origin = pawn.AbsOrigin;
+        if (origin == null) return;
+
+        var eyeAngles = pawn.EyeAngles;
+        eyeAngles.AngleVectors(out var fwd, out _, out _);
+
+        const float back = 110f;
+        const float up = 20f;
+        float eyeZ = origin.Z + pawn.ViewOffset.Z;
+
+        var camPos = new Vector(
+            origin.X - fwd.X * back,
+            origin.Y - fwd.Y * back,
+            eyeZ - fwd.Z * back + up);
+
+        camera.Teleport(camPos, eyeAngles, null);
+    }
+
+    // Called once per tick from OnTick. Keeps each active camera glued behind
+    // its player and tears thirdperson down if the player died / went invalid.
+    public static void UpdateThirdpersonCameras()
+    {
+        if (Plugin.ThirdpersonCam.Count == 0) return;
+
+        foreach (var slot in Plugin.ThirdpersonCam.Keys.ToList())
+        {
+            var player = Utilities.GetPlayerFromSlot(slot);
+            var pawn = player?.PlayerPawn.Value;
+
+            if (player == null || !player.IsValid || pawn == null || !pawn.IsValid || !player.PawnIsAlive)
+            {
+                if (player != null && player.IsValid)
+                {
+                    DisableThirdperson(player);
+                }
+                else
+                {
+                    // Player gone (disconnect) — just drop the camera entity.
+                    if (Plugin.ThirdpersonCam.TryGetValue(slot, out var cam) && cam != null && cam.IsValid)
+                        cam.Remove();
+                    Plugin.ThirdpersonCam.Remove(slot);
+                }
+                continue;
+            }
+
+            var camera = Plugin.ThirdpersonCam[slot];
+            if (camera == null || !camera.IsValid)
+            {
+                DisableThirdperson(player);
+                continue;
+            }
+
+            PositionThirdpersonCamera(pawn, camera);
+        }
+    }
+
+    [ConsoleCommand("css_thirdperson", "Prop Hunt: toggle thirdperson camera")]
+    public void OnPhThirdperson(CCSPlayerController? player, CommandInfo command)
+    {
+        if (player == null || !player.IsValid) return;
+        ToggleThirdperson(player);
+    }
+
     // ---- Admin physics debug -----------------------------------------------
     // Lock / unlock every loose physics prop on the map (NOT hider props —
     // they're tracked separately and untouchable here). Useful when a map
@@ -299,6 +454,12 @@ public partial class Plugin
         Instance.RegisterListener<Listeners.OnPlayerButtonsChanged>((player, pressed, released) =>
         {
             if (player == null || !player.IsValid) return;
+
+            // Thirdperson toggle is available to EVERYONE (hiders + seekers),
+            // so it lives before the hider-only gate. Bound to the weapon
+            // Inspect key (no client config; also exposed as css_thirdperson).
+            if ((pressed & PlayerButtons.Inspect) != 0) ToggleThirdperson(player);
+
             if (!Plugin.HiddenPlayers.TryGetValue(player.Slot, out var data)) return;
 
             if ((pressed & PlayerButtons.Use)     != 0) DoFreeze(player, data);

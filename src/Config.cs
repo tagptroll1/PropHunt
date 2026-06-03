@@ -57,6 +57,16 @@ public class PlayerProp
     public int Hp;
     public int MaxHp;
 
+    // Horizontal offset (in the prop's local model space) from the model's
+    // origin to the geometric center of its AABB. Many prop models have their
+    // origin at a corner/edge rather than the middle, so teleporting the prop
+    // straight onto the player leaves it visibly off-center — part of it pokes
+    // out of cover / through walls. We subtract this (rotated by yaw) when
+    // following the player so the prop's center sits over the player instead.
+    // Recomputed by ApplySizeAndCollision whenever the model changes.
+    public float CenterX;
+    public float CenterY;
+
     public PlayerProp(CPhysicsProp prop, string model)
     {
         entity = prop;

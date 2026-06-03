@@ -104,6 +104,13 @@ public static class Events
 
         if (entity.DesignerName == "func_buyzone")
             entity.Remove();
+
+        // mp_give_player_c4 0 only stops players from being handed the bomb; the
+        // map still spawns a loose weapon_c4 (and the planted-bomb target on some
+        // maps), which shows up lying in the world and as the bomb icon on the
+        // radar/minimap. Prop Hunt has no bomb objective, so strip it on spawn.
+        if (entity.DesignerName == "weapon_c4" || entity.DesignerName == "planted_c4")
+            entity.Remove();
     }
 
     private static void CheckTransmit(CCheckTransmitInfoList infoList)
@@ -130,6 +137,8 @@ public static class Events
 
     private static void OnTick()
     {
+        Plugin.UpdateThirdpersonCameras();
+
         var players = Utilities.GetPlayers();
 
         foreach (var player in players.Where(x => x.PawnIsAlive && x.Team == Utils.TeamFromText(Config.Settings.Hiding.Team)))
@@ -144,9 +153,10 @@ public static class Events
                 if (!hidden.Frozen)
                 {
                     var rot = pawn.AbsRotation;
+                    float yaw = rot.Y + hidden.YawOffset;
                     if (hidden.YawOffset != 0f)
-                        rot = new QAngle(rot.X, rot.Y + hidden.YawOffset, rot.Z);
-                    prop.Teleport(pawn.AbsOrigin, rot);
+                        rot = new QAngle(rot.X, yaw, rot.Z);
+                    prop.Teleport(Utils.PropFollowOrigin(pawn.AbsOrigin, yaw, hidden), rot);
                 }
             }
         }
@@ -155,8 +165,11 @@ public static class Events
         if (hiding)
         {
             string timeLeft = Plugin.hideTime.Subtract(DateTime.Now).ToString("mm\\:ss");
+            // CenterHtml renders in the upper-center of the screen; the old
+            // PrintToCenterAlert sat at dead-center and overlapped the RTV
+            // addon's menu. Moving it up clears the center for that menu.
             foreach (var player in players)
-                player.PrintToCenterAlert($"Hiding time: {timeLeft}");
+                player.PrintToCenterHtml($"<font color='#ffcc00'>Hiding time: {timeLeft}</font>");
         }
     }
 
@@ -167,6 +180,12 @@ public static class Events
         Plugin.HiddenPlayers.Clear();
         Plugin.roundStarted = false;
         killedPlayers.Clear();
+
+        // New pawns spawn this round in first person; drop any leftover camera
+        // props and clear the registry so stale handles don't linger.
+        foreach (var cam in Plugin.ThirdpersonCam.Values)
+            if (cam != null && cam.IsValid) cam.Remove();
+        Plugin.ThirdpersonCam.Clear();
 
         foreach (var timer in Instance.Timers)
             timer?.Kill();
@@ -224,6 +243,12 @@ public static class Events
 
             if (isHider)
             {
+                // Hiders get a knife. The pawn is rendered invisible and the
+                // prop hides them from seekers, so this is only their own
+                // first-person viewmodel (handy to confirm they're alive /
+                // oriented) — it doesn't reveal them.
+                player.GiveWeapon("weapon_knife");
+
                 Utils.PropSpawner(player);
             }
             else
