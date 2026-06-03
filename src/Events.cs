@@ -49,6 +49,13 @@ public static class Events
     {
         Server.ExecuteCommand("mp_give_player_c4 0");
 
+        // Prop Hunt runs deliberately uneven teams (many hiders, few seekers,
+        // plus the round-prestart scramble). With balance enforcement on, the
+        // engine rejects joins with "Failed to join game" whenever the team
+        // delta exceeds mp_limitteams. Disable both so anyone can always join.
+        Server.ExecuteCommand("mp_limitteams 0");
+        Server.ExecuteCommand("mp_autoteambalance 0");
+
         CsTeam team = Utils.TeamFromText(Config.Settings.Hiding.Team);
         Server.ExecuteCommand($"mp_teamname_1 {(team == CsTeam.Terrorist ? "Seekers" : "Hiders")}");
         Server.ExecuteCommand($"mp_teamname_2 {(team == CsTeam.Terrorist ? "Hiders" : "Seekers")}");
@@ -173,22 +180,11 @@ public static class Events
             Utils.PrintToChatAll("Releasing the seekers!");
             Plugin.roundStarted = true;
 
-            // Pull seekers down from the off-map hold into a real CT spawn,
-            // then unfreeze. If no CT spawns are found (weird map), just
-            // unfreeze in place — better than leaving them stranded at z+10000.
-            var ctSpawns = Utilities.FindAllEntitiesByDesignerName<SpawnPoint>("info_player_counterterrorist").ToList();
-
+            // Seekers stayed frozen + black-screened at their own spawn during
+            // hide time (we no longer punt them out of the world — see
+            // EventPlayerSpawn). Releasing them is just an unfreeze.
             foreach (var player in seekers)
-            {
-                var pawn = player.PlayerPawn.Value;
-                if (pawn != null && ctSpawns.Count > 0)
-                {
-                    var spawn = ctSpawns[Random.Shared.Next(ctSpawns.Count)];
-                    if (spawn.AbsOrigin != null)
-                        pawn.Teleport(spawn.AbsOrigin, spawn.AbsRotation, new Vector(0, 0, 0));
-                }
                 player.UnFreeze();
-            }
 
         }, TimerFlags.STOP_ON_MAPCHANGE);
 
@@ -240,30 +236,14 @@ public static class Events
                     player.Freeze();
                     player.ColorScreen(Color.Black, Config.Settings.Hiding.Time, 0.5f, EntityExtends.FadeFlags.FADE_OUT);
 
-                    // Park the seeker high above their spawn point so they
-                    // can't audio-scout / clip-peek the hiders during hide
-                    // time. They're already frozen + black-screened, but
-                    // physically being out of the playable area also kills
-                    // any chance of fmod 3D-positional info leaking. Reveal
-                    // teleports them back to a random CT spawn.
-                    var heldPawn = player.PlayerPawn.Value;
-                    if (heldPawn != null)
-                    {
-                        var origin = heldPawn.AbsOrigin;
-                        if (origin != null)
-                        {
-                            // Teleport DOWN, not up. Upward lifts to z+60000
-                            // got ignored — probably because the seeker is
-                            // frozen via MOVETYPE_OBSOLETE on the same frame
-                            // and the engine rejects the displacement, or a
-                            // kill volume above the skybox bounces them back.
-                            // Below-map space has no such constraint; the
-                            // seeker is also frozen so they can't suicide
-                            // into a respawn.
-                            var sink = new Vector(origin.X, origin.Y, origin.Z - 30000f);
-                            heldPawn.Teleport(sink, heldPawn.AbsRotation, new Vector(0, 0, 0));
-                        }
-                    }
+                    // Keep the seeker frozen + black-screened at their own
+                    // spawn during hide time. We deliberately do NOT teleport
+                    // them out of the playable area: dropping a pawn far below
+                    // the map (the old z-30000 "sink") puts it past the world
+                    // bottom, and Source 2 kills "fell out of world" entities
+                    // on the next think — the check is positional, so being
+                    // frozen does not save them. That was killing the seeker
+                    // every single round before they could be released.
                 }
 
                 else player.UnFreeze();
