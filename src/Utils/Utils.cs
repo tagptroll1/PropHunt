@@ -192,6 +192,52 @@ public static class Utils
         return new Vector(pawnOrigin.X - worldX, pawnOrigin.Y - worldY, pawnOrigin.Z);
     }
 
+    // Build entity angles that tilt a prop so its local up (+Z) aligns to the
+    // surface normal `n`, while keeping the player's facing yaw. This is Source's
+    // VectorAngles(forward, pseudo-up) — the forward vector is the yaw direction
+    // projected onto the surface plane, and the up vector is the normal.
+    public static QAngle SurfaceAngles(float yawDeg, float nx, float ny, float nz)
+    {
+        float nl = MathF.Sqrt(nx * nx + ny * ny + nz * nz);
+        if (nl < 1e-4f)
+            return new QAngle(0f, yawDeg, 0f);
+        nx /= nl; ny /= nl; nz /= nl;
+
+        // Horizontal facing from yaw, projected onto the plane ⟂ to the normal.
+        double y = yawDeg * Math.PI / 180.0;
+        float fx = (float)Math.Cos(y), fy = (float)Math.Sin(y), fz = 0f;
+        float d = fx * nx + fy * ny + fz * nz;
+        fx -= d * nx; fy -= d * ny; fz -= d * nz;
+        float fl = MathF.Sqrt(fx * fx + fy * fy + fz * fz);
+        if (fl < 1e-4f)
+            return new QAngle(0f, yawDeg, 0f);
+        fx /= fl; fy /= fl; fz /= fl;
+
+        // left = up × forward
+        float lx = ny * fz - nz * fy;
+        float ly = nz * fx - nx * fz;
+        float lz = nx * fy - ny * fx;
+
+        const float Rad2Deg = 180f / MathF.PI;
+        float xyDist = MathF.Sqrt(fx * fx + fy * fy);
+        float pitch, yaw, roll;
+        if (xyDist > 1e-3f)
+        {
+            yaw = MathF.Atan2(fy, fx) * Rad2Deg;
+            pitch = MathF.Atan2(-fz, xyDist) * Rad2Deg;
+            roll = MathF.Atan2(lz, ly * fx - lx * fy) * Rad2Deg;
+        }
+        else
+        {
+            // forward is vertical — derive yaw from the left vector, no roll.
+            yaw = MathF.Atan2(-lx, ly) * Rad2Deg;
+            pitch = MathF.Atan2(-fz, xyDist) * Rad2Deg;
+            roll = 0f;
+        }
+
+        return new QAngle(pitch, yaw, roll);
+    }
+
     public static void AddMapModels(string mapname)
     {
         Plugin.models.Clear();

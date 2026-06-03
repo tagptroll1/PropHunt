@@ -11,8 +11,12 @@ using CounterStrikeSharp.API.Core.Attributes.Registration;
 using CounterStrikeSharp.API.Modules.Admin;
 using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Entities.Constants;
+using CounterStrikeSharp.API.Modules.Memory;
 using CounterStrikeSharp.API.Modules.Timers;
 using CounterStrikeSharp.API.Modules.Utils;
+using CS2TraceRay.Class;
+using CS2TraceRay.Enum;
+using CS2TraceRay.Struct;
 using FixVectorLeak;
 
 public partial class Plugin
@@ -46,19 +50,22 @@ public partial class Plugin
             // effective hitbox to climb on.
             data.entity.CollisionRulesChanged(CollisionGroup.COLLISION_GROUP_NPC);
 
-            // Kill the pawn's velocity *before* freezing the move type. Freezing
-            // only stops further movement; any velocity the player carried into
-            // the freeze (e.g. mid-air) would otherwise drift the pawn away from
-            // the now-stationary prop, so the player and prop ended up in
-            // different spots. Zeroing it keeps them locked together.
-            if (pawn != null && pawn.AbsVelocity != null)
-            {
-                pawn.AbsVelocity.X = 0f;
-                pawn.AbsVelocity.Y = 0f;
-                pawn.AbsVelocity.Z = 0f;
-            }
-
             player.Freeze();
+
+            // Pin the pawn exactly where it is with ZERO velocity. Just writing
+            // the velocity vector fields doesn't reliably stop a mid-air pawn
+            // (movement reads m_vecVelocity, which the engine recomputes); a
+            // Teleport with an explicit zero velocity forces the engine to clear
+            // it. Combined with the frozen move type (which kills gravity) the
+            // player stays locked in mid-air until they unfreeze, instead of
+            // sailing on and leaving the prop behind.
+            if (pawn != null)
+                pawn.Teleport(pawn.AbsOrigin, pawn.AbsRotation, new Vector(0f, 0f, 0f));
+
+            // Capture the surface to tilt the prop onto: a wall the player faces
+            // (painting flat on a wall) takes priority, else the floor slope
+            // (car on a hill). Upright when neither applies (e.g. mid-air).
+            CaptureSurfaceNormal(pawn, data);
         }
         else
         {
@@ -67,14 +74,17 @@ public partial class Plugin
                 : CollisionGroup.COLLISION_GROUP_DEBRIS;
             data.entity.CollisionRulesChanged(group);
             player.UnFreeze();
+
+            // Back to upright while it tracks the player again.
+            data.NormalX = 0f; data.NormalY = 0f; data.NormalZ = 1f;
         }
 
         if (pawn != null)
         {
-            var rot = pawn.AbsRotation;
-            float yaw = rot.Y + data.YawOffset;
-            if (data.YawOffset != 0f)
-                rot = new QAngle(rot.X, yaw, rot.Z);
+            float yaw = pawn.AbsRotation.Y + data.YawOffset;
+            QAngle rot = data.Frozen
+                ? Utils.SurfaceAngles(yaw, data.NormalX, data.NormalY, data.NormalZ)
+                : new QAngle(pawn.AbsRotation.X, yaw, pawn.AbsRotation.Z);
             data.entity.Teleport(Utils.PropFollowOrigin(pawn.AbsOrigin, yaw, data), rot);
         }
 
@@ -98,13 +108,103 @@ public partial class Plugin
         var pawn = player.PlayerPawn.Value;
         if (pawn == null) return;
 
-        var baseRot = pawn.AbsRotation;
-        float yaw = baseRot.Y + data.YawOffset;
-        var rot = new QAngle(baseRot.X, yaw, baseRot.Z);
+        float yaw = pawn.AbsRotation.Y + data.YawOffset;
+        // Keep the captured surface tilt; only the yaw changes.
+        var rot = Utils.SurfaceAngles(yaw, data.NormalX, data.NormalY, data.NormalZ);
         // Re-derive the origin from the pawn (not the prop's current origin):
         // rotating changes which way the center offset points, so we must
         // recompute it to keep the prop's center over the player.
         data.entity.Teleport(Utils.PropFollowOrigin(pawn.AbsOrigin, yaw, data), rot);
+    }
+
+    // Decide what surface the frozen prop should tilt onto and stash it in
+    // data.Normal{X,Y,Z}. Wall beats floor: if the player is up against a wall
+    // we lay the prop flat against it (painting); otherwise we match the floor
+    // slope; otherwise upright. Honors the SurfaceSnap config toggle.
+    private static void CaptureSurfaceNormal(CCSPlayerPawn? pawn, PlayerProp data)
+    {
+        if (pawn != null && Instance.Config.Settings.SurfaceSnap)
+        {
+            if (TryWallNormal(pawn, out float wx, out float wy, out float wz))
+            {
+                data.NormalX = wx; data.NormalY = wy; data.NormalZ = wz;
+                return;
+            }
+            if (TryGroundNormal(pawn, out float gx, out float gy, out float gz))
+            {
+                data.NormalX = gx; data.NormalY = gy; data.NormalZ = gz;
+                return;
+            }
+        }
+
+        data.NormalX = 0f; data.NormalY = 0f; data.NormalZ = 1f;
+    }
+
+    // Trace horizontally from the player's eyes toward the wall they're facing,
+    // using CS2TraceRay (a maintained native-trace wrapper, so no hand-rolled
+    // memory code). MaskSolidBrushOnly hits world brushes/static props only —
+    // not players or the hider's own prop — so no self-hit and no skip handle is
+    // needed. Returns the wall's normal when a near-vertical surface is within
+    // reach, so flat props snap onto it.
+    private static bool TryWallNormal(CCSPlayerPawn pawn, out float nx, out float ny, out float nz)
+    {
+        nx = 0f; ny = 0f; nz = 1f;
+
+        var origin = pawn.AbsOrigin;
+        if (origin == null) return false;
+
+        var eyePos = new Vector(origin.X, origin.Y, origin.Z + pawn.ViewOffset.Z);
+        // Horizontal facing only (ignore pitch) so we look straight ahead for a
+        // wall rather than into the floor/ceiling.
+        var flat = new QAngle(0f, pawn.EyeAngles.Y, 0f);
+
+        const float maxDist = 64f;
+        CGameTrace trace = TraceRay.TraceShape(
+            eyePos, flat, (ulong)TraceMask.MaskSolidBrushOnly, Contents.Empty, IntPtr.Zero);
+
+        if (trace.Fraction >= 1.0f) return false;   // nothing ahead
+        if (trace.Distance() > maxDist) return false; // wall too far to "snap" to
+
+        var n = trace.Normal;
+        float len = MathF.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
+        if (len < 0.5f) return false;
+        nx = n.X / len; ny = n.Y / len; nz = n.Z / len;
+
+        // Only treat near-vertical surfaces as walls (normal mostly horizontal);
+        // anything flatter is floor/ceiling and handled by the ground path.
+        if (MathF.Abs(nz) > 0.5f) return false;
+        return true;
+    }
+
+    // Read the slope normal of the floor the player is standing on. Pure schema
+    // reads (FL_ONGROUND flag + the movement service's GroundNormal) — no
+    // raycasting, so no native-memory risk. Returns false (and leaves the prop
+    // upright) when airborne or when the normal looks invalid / near-vertical.
+    private static bool TryGroundNormal(CCSPlayerPawn pawn, out float nx, out float ny, out float nz)
+    {
+        nx = 0f; ny = 0f; nz = 1f;
+
+        const uint FL_ONGROUND = 1u << 0;
+        if ((pawn.Flags & FL_ONGROUND) == 0)
+            return false;
+
+        var ms = pawn.MovementServices;
+        if (ms == null)
+            return false;
+
+        var humanoid = new CPlayer_MovementServices_Humanoid(ms.Handle);
+        var n = humanoid.GroundNormal;
+        if (n == null)
+            return false;
+
+        float len = MathF.Sqrt(n.X * n.X + n.Y * n.Y + n.Z * n.Z);
+        // Reject garbage (zero) and near-vertical surfaces — laying a prop flat
+        // against a steep wall via the floor normal looks wrong; keep it upright.
+        if (len < 0.5f || n.Z / len < 0.3f)
+            return false;
+
+        nx = n.X / len; ny = n.Y / len; nz = n.Z / len;
+        return true;
     }
 
     private static void DoDecoy(CCSPlayerController player, PlayerProp data)
@@ -141,15 +241,16 @@ public partial class Plugin
 
         var sounds = Instance.Config.Sounds.Taunt;
         var sound = sounds[Random.Shared.Next(sounds.Count)];
-        // Emit from the player PAWN, not the controller. The controller is a
-        // non-spatial entity (no world transform), so EmitSound on it plays at
-        // the world origin (0,0,0) for everyone — that was the "taunts all play
-        // in one spot" bug. OnTick keeps the pawn synced to the prop's visible
-        // location, and the pawn is a proper 3D audio emitter, so emitting from
-        // it plays the taunt at the prop with correct directional falloff.
-        var pawn = player.PlayerPawn.Value;
-        if (pawn != null && pawn.IsValid)
-            pawn.EmitSound(sound);
+        // Emit from the PROP, not the controller or the pawn:
+        //  - the controller is non-spatial → plays at world origin (0,0,0).
+        //  - the pawn IS spatial, but CheckTransmit removes the hidden player's
+        //    pawn from every other client, so a seeker's client has no such
+        //    entity to anchor the sound to and plays it at a bogus position
+        //    (the "random spot on the map" bug).
+        // The prop is transmitted to everyone and sits exactly where the hider
+        // is, so it's the correct 3D emitter for both the hider and seekers.
+        if (data.entity != null && data.entity.IsValid)
+            data.entity.EmitSound(sound);
         else
             player.EmitSound(sound);
 
@@ -272,6 +373,15 @@ public partial class Plugin
         var camera = Utilities.CreateEntityByName<CDynamicProp>("prop_dynamic");
         if (camera == null) return;
         camera.DispatchSpawn();
+
+        // A prop_dynamic with no model renders the default ERROR model. Set the
+        // EF_NODRAW (0x20) effect flag so the camera anchor is fully invisible
+        // to everyone — it still networks (so it works as a view entity), it
+        // just doesn't draw. Also drop it out of all collision so it can't be
+        // shot, bumped, or block movement.
+        camera.Collision.CollisionGroup = (byte)CollisionGroup.COLLISION_GROUP_NEVER;
+        Schema.SetSchemaValue(camera.Handle, "CBaseEntity", "m_fEffects", 0x20u);
+        Utilities.SetStateChanged(camera, "CBaseEntity", "m_fEffects");
 
         Plugin.ThirdpersonCam[player.Slot] = camera;
         PositionThirdpersonCamera(pawn, camera);

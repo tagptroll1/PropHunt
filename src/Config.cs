@@ -11,6 +11,11 @@ public class Config_Settings
     public string Prefix { get; set; } = "{lightblue}[PropHunt]";
     public string MenuType { get; set; } = "CenterHtmlMenu";
     public bool TeamScramble { get; set; } = true;
+
+    // When a hider freezes their prop while standing on the ground, tilt the
+    // prop to match the floor's slope (e.g. a car follows a hill). Uses the
+    // engine's GroundNormal — a plain schema read, no raycasting.
+    public bool SurfaceSnap { get; set; } = true;
     public class Config_Settings_Hiding
     {
         public string Team { get; set; } = "T";
@@ -67,6 +72,13 @@ public class PlayerProp
     public float CenterX;
     public float CenterY;
 
+    // Surface normal the prop is tilted onto while frozen (world up = no tilt).
+    // Captured at freeze time from the floor under the player; reused by
+    // DoRotate so yaw nudges keep the same tilt. Reset to up on unfreeze.
+    public float NormalX;
+    public float NormalY;
+    public float NormalZ;
+
     public PlayerProp(CPhysicsProp prop, string model)
     {
         entity = prop;
@@ -79,6 +91,9 @@ public class PlayerProp
         Hp = 100;
         MaxHp = 100;
         YawOffset = 0f;
+        NormalX = 0f;
+        NormalY = 0f;
+        NormalZ = 1f;
     }
 
     // Admin-nudged yaw offset, added to the player's AbsRotation each tick.

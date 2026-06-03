@@ -1,5 +1,5 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
-    <PropertyGroup>		
+    <PropertyGroup>
         <TargetFramework>net8.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
@@ -8,5 +8,21 @@
 
     <ItemGroup>
         <PackageReference Include="CounterStrikeSharp.API" Version="1.0.355" />
+        <!-- Maintained CS2 trace-ray wrapper (schwarper). Used for wall snapping
+             on freeze; keeps the native GameTraceManager signature/offsets current
+             so we don't hand-roll crash-prone memory code. GeneratePathProperty
+             lets the target below copy just THIS dll into the output — the CSS
+             runtime already provides all the other transitive deps, so we must
+             not ship those. -->
+        <PackageReference Include="CS2TraceRay" Version="1.0.9" GeneratePathProperty="true" />
     </ItemGroup>
+
+    <!-- Ship CS2TraceRay.dll alongside PropHunt.dll (class libraries don't copy
+         package assemblies by default). Only this one assembly is novel; every
+         other dependency is supplied by the CounterStrikeSharp host. -->
+    <Target Name="CopyCS2TraceRay" AfterTargets="Build;Publish">
+        <Copy SourceFiles="$(PkgCS2TraceRay)/lib/net8.0/CS2TraceRay.dll"
+              DestinationFolder="$(OutDir)"
+              SkipUnchangedFiles="true" />
+    </Target>
 </Project>
